@@ -8,7 +8,7 @@ import os
 from dotenv import load_dotenv
 import random
 
-# Cargar variables de entorno
+# Cargar variables de entorno (Local)
 load_dotenv()
 
 # Configuración de la página
@@ -29,10 +29,14 @@ if 'processes' not in st.session_state:
 with st.sidebar:
     st.header("System Configuration")
     
-    # API Key Handling
-    env_key = os.getenv("OPENROUTER_API_KEY")
+    # API Key Handling (Hybrid: Streamlit Secrets -> Local Env -> Manual Input)
+    if "OPENROUTER_API_KEY" in st.secrets:
+        env_key = st.secrets["OPENROUTER_API_KEY"]
+    else:
+        env_key = os.getenv("OPENROUTER_API_KEY")
+
     if env_key:
-        st.info("API Key loaded from environment.")
+        st.info("API Key loaded from environment/secrets.")
         api_key = env_key
     else:
         api_key = st.text_input("OpenRouter API Key", type="password")
@@ -65,7 +69,6 @@ with st.sidebar:
                 'arrival': random.randint(0, max_arrival),
                 'burst': random.randint(1, max_burst)
             })
-        # Ordenamos por llegada para limpieza visual, aunque el algoritmo lo maneja igual
         new_data.sort(key=lambda x: x['arrival'])
         st.session_state.processes = new_data
         st.rerun()
@@ -84,10 +87,10 @@ if len(st.session_state.processes) > 0:
     # Convert to DataFrame
     df_input = pd.DataFrame(st.session_state.processes)
     
-    # Data Editor allows direct manipulation of the grid
+    # Data Editor allows direct manipulation
     edited_df = st.data_editor(
         df_input,
-        num_rows="dynamic", # Allow adding/deleting rows directly in UI
+        num_rows="dynamic",
         use_container_width=True,
         column_config={
             "id": "Process ID",
@@ -96,8 +99,7 @@ if len(st.session_state.processes) > 0:
         }
     )
     
-    # Update session state with edits
-    # We convert back to list of dicts to keep compatibility with algorithms
+    # Update session state
     st.session_state.processes = edited_df.to_dict('records')
 else:
     st.info("No processes defined. Use the sidebar generator or add rows manually.")
@@ -125,11 +127,12 @@ if st.button("RUN SIMULATION", type="primary") and len(st.session_state.processe
             
         # B. METRICS CALCULATION
         df_timeline = pd.DataFrame(timeline)
+        df_timeline['Duration'] = df_timeline['Finish'] - df_timeline['Start'] # Vital para px.bar
         
-        # Group by Process to find the LAST finish time (essential for RR)
+        # Group by Process to find the LAST finish time
         df_metrics = df_timeline.groupby('Process')['Finish'].max().reset_index()
         
-        # Merge with original input to get Arrival and Burst
+        # Merge with original input
         df_original = pd.DataFrame(clean_processes)
         df_metrics = df_metrics.merge(df_original, left_on='Process', right_on='id')
         
@@ -153,11 +156,22 @@ if st.button("RUN SIMULATION", type="primary") and len(st.session_state.processe
         kpi3.metric("Avg Waiting", f"{avg_wt:.2f} ms")
         kpi4.metric("CPU Utilization", f"{cpu_utilization:.1f}%")
         
-        # Gantt Chart
+        # Gantt Chart Visualization (NUMERIC FIX)
         st.markdown("### Gantt Chart Visualization")
-        fig = px.timeline(df_timeline, x_start="Start", x_end="Finish", y="Process", color="Process", 
-                          height=350)
-        fig.update_yaxes(autorange="reversed") 
+        
+        # Usamos Bar Chart Horizontal para evitar problemas de fechas
+        fig = px.bar(
+            df_timeline, 
+            x="Duration", 
+            y="Process", 
+            base="Start", # Empuja la barra al tiempo correcto
+            orientation='h', 
+            color="Process", 
+            text="Duration",
+            height=350
+        )
+        
+        fig.update_yaxes(autorange="reversed") # P1 arriba
         fig.update_layout(
             xaxis_title="Time (ms)", 
             showlegend=False,
@@ -205,12 +219,12 @@ if st.button("RUN SIMULATION", type="primary") and len(st.session_state.processe
             try:
                 with st.spinner('Generating engineering report...'):
                     completion = client.chat.completions.create(
-                        model="meta-llama/llama-3.1-70b-instruct:free",
+                        # MODELO DEEPSEEK GRATUITO
+                        model="deepseek/deepseek-r1-0528-qwen3-8b:free", 
                         messages=[{"role": "user", "content": prompt}]
                     )
                     st.markdown(completion.choices[0].message.content)
             except Exception as e:
                 st.error(f"API Error: {e}")
         else:
-            st.info("Configure API Key in sidebar to enable AI analysis.")
-
+            st.info("Configure API Key in sidebar (or secrets) to enable AI analysis.")
